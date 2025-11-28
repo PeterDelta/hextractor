@@ -1,0 +1,63 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name for the release (e.g. v1.60)'
+        required: true
+      name:
+        description: 'Release name (optional)'
+        required: false
+      body:
+        description: 'Release notes (optional)'
+        required: false
+      prerelease:
+        description: 'Mark as prerelease (true/false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Build with Maven
+        run: mvn -B -DskipTests package
+
+      - name: List build artifacts
+        run: ls -la target || true
+
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          release_name: ${{ github.event.inputs.name || github.event.inputs.tag }}
+          body: ${{ github.event.inputs.body }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: target/Hextractor.jar
+          asset_name: Hextractor.jar
+          asset_content_type: application/java-archive
+
+      - name: Debug create_release outputs
+        run: |
+          echo "create_release.upload_url=${{ steps.create_release.outputs.upload_url }}"
+          echo "create_release.id=${{ steps.create_release.outputs.id }}"

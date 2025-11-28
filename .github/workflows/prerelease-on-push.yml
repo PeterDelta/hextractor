@@ -1,0 +1,76 @@
+name: Prerelease on Push
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-prerelease:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Get project version
+        id: get_version
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create prerelease tag
+        run: |
+          TAG="v${{ steps.get_version.outputs.version }}-pre-${{ github.run_number }}"
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag $TAG
+          git push origin $TAG
+
+      - name: Build with Maven
+        run: mvn -B -DskipTests package
+
+      - name: List build artifacts
+        run: ls -la target/
+
+      - name: Check JAR exists
+        run: |
+          if [ ! -f target/Hextractor.jar ]; then
+            echo "Hextractor.jar not found!"
+            exit 1
+          fi
+
+      - name: Copy JAR to root
+        run: cp target/Hextractor.jar .
+
+      - name: List files for zip
+        run: |
+          pwd
+          ls -la
+          ls -la Hextractor.jar .Hextractor/nppextDarklang.xml .Hextractor/nppextlang.xml .Hextractor/_readme.txt .Hextractor/EngDict.txt || true
+
+      - name: Create release zip
+        run: |
+          zip -r Hextractor-1.60.zip Hextractor.jar .Hextractor/
+
+      - name: Verify zip contents
+        run: |
+          unzip -l Hextractor-1.60.zip
+
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}-pre-${{ github.run_number }}
+          name: Hextractor v${{ steps.get_version.outputs.version }}
+          body: Prerelease created automatically on push to main. Commit ${{ github.sha }}
+          draft: false
+          prerelease: true
+          files: Hextractor-1.60.zip

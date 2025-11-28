@@ -1,0 +1,19 @@
+# Build artifacts
+target/
+*.jar
+*.zip
+
+# IDE
+.idea/
+.settings/
+.classpath
+.project
+*.iml
+.vscode/
+bin/
+
+# Local files
+_readme.txt
+EngDict.txt
+nppextlang.xml
+nppextDarklang.xml
