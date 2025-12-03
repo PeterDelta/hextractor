@@ -31,7 +31,7 @@
     </dependencies>
 
     <build>
-        <finalName>Hextractor</finalName>
+        <finalName>.Hextractor</finalName>
         <plugins>
             <plugin>
                 <groupId>org.jacoco</groupId>

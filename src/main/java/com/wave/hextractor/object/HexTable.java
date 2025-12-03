@@ -50,11 +50,20 @@ public class HexTable implements Serializable {
 		SPANISH_CHARS.put("N", "Ñ");
 	}
 
-	/** The table. */
+	/** The table for single-byte mappings (backward compatibility). */
 	private Map<Byte, String> table = new HashMap<>();
 
-	/** The reversed. */
-	private Map<String, Byte> reversed = new HashMap<>();
+	/** The reversed map for single-byte mappings (value -> byte). */
+	private Map<String, Byte> reversedSingle = new HashMap<>();
+
+	/** The reversed map for any-length mappings (value -> bytes). */
+	private Map<String, byte[]> reversedMulti = new HashMap<>();
+
+	/** Alternative multi-byte encodings for the same character (for disambiguation). */
+	private Map<String, List<byte[]>> multiAlternatives = new HashMap<>();
+
+	/** Trie structure to support multi-byte keys with longest-match decoding. */
+	private final TrieNode trieRoot = new TrieNode();
 
 	/** The searchPercentCompleted. */
 	private float searchPercent = 0;
@@ -92,17 +101,17 @@ public class HexTable implements Serializable {
 	 */
 	public String toSelectionString() {
 		StringBuilder res = new StringBuilder();
-		if(reversed.containsKey(TABLE_KEY_A)) {
+		if(reversedSingle.containsKey(TABLE_KEY_A)) {
 			res.append(TABLE_KEY_A).append(Constants.OFFSET_LENGTH_SEPARATOR).append(Constants.SPACE_STR);
-			res.append(Utils.intToHexString(reversed.get(TABLE_KEY_A), Constants.HEXSIZE_8BIT_VALUE)).append(Constants.SPACE_STR);
+			res.append(Utils.intToHexString(reversedSingle.get(TABLE_KEY_A), Constants.HEXSIZE_8BIT_VALUE)).append(Constants.SPACE_STR);
 		}
-		if(reversed.containsKey(TABLE_KEY_LOWA)) {
+		if(reversedSingle.containsKey(TABLE_KEY_LOWA)) {
 			res.append(TABLE_KEY_LOWA).append(Constants.OFFSET_LENGTH_SEPARATOR).append(Constants.SPACE_STR);
-			res.append(Utils.intToHexString(reversed.get(TABLE_KEY_LOWA), Constants.HEXSIZE_8BIT_VALUE)).append(Constants.SPACE_STR);
+			res.append(Utils.intToHexString(reversedSingle.get(TABLE_KEY_LOWA), Constants.HEXSIZE_8BIT_VALUE)).append(Constants.SPACE_STR);
 		}
-		if(reversed.containsKey(TABLE_KEY_ZERO)) {
+		if(reversedSingle.containsKey(TABLE_KEY_ZERO)) {
 			res.append(TABLE_KEY_ZERO).append(Constants.OFFSET_LENGTH_SEPARATOR).append(Constants.SPACE_STR);
-			res.append(Utils.intToHexString(reversed.get(TABLE_KEY_ZERO), Constants.HEXSIZE_8BIT_VALUE)).append(Constants.SPACE_STR);
+			res.append(Utils.intToHexString(reversedSingle.get(TABLE_KEY_ZERO), Constants.HEXSIZE_8BIT_VALUE)).append(Constants.SPACE_STR);
 		}
 		return res.toString();
 	}
@@ -114,31 +123,56 @@ public class HexTable implements Serializable {
 	 */
 	private void loadLines(List<String> tableLines) {
 		table = new HashMap<>();
-		reversed = new HashMap<>();
+		reversedSingle = new HashMap<>();
+		reversedMulti = new HashMap<>();
+		multiAlternatives = new HashMap<>();
+		trieRoot.clear();
+		int singleByteCount = 0;
+		int multiByteCount = 0;
 		for(String s : tableLines) {
 			if(s.length() >= 4 && s.contains(Constants.TABLE_SEPARATOR)) {
 				boolean isEquals = s.contains(Constants.TABLE_SEPARATOR + Constants.TABLE_SEPARATOR);
+				String[] items = s.split(Constants.TABLE_SEPARATOR, 2);
 				String tablechar;
-				String[] items = s.split(Constants.TABLE_SEPARATOR);
 				if(isEquals) {
 					tablechar = s.substring(s.indexOf(Constants.TABLE_SEPARATOR) + 1);
 				}
 				else {
 					tablechar = items[1];
 				}
-				//Eliminamos saltos de linea
+				// Remove CR/LF
 				tablechar = tablechar.replaceAll(Constants.S_NEWLINE, Constants.EMPTY).replaceAll(Constants.S_CRETURN, Constants.EMPTY);
 				if(Constants.RESERVED_CHARS.contains(tablechar)) {
 					Utils.log("WARNING - Table char \"" + tablechar + "\" will not be used because it is reserved.");
 				}
 				else {
-					addToTable(Utils.hexStringCharToByte(items[0].toUpperCase().trim()), tablechar);
+					String keyHex = items[0].toUpperCase().trim().replace(" ", Constants.EMPTY);
+					// Basic validation
+					if(keyHex.length() >= 2 && keyHex.length() % 2 == 0) {
+						try {
+							byte[] keyBytes = Utils.hexStringToByteArray(keyHex);
+							if(keyBytes.length == 1) {
+								addToTable(Byte.valueOf(keyBytes[0]), tablechar);
+								singleByteCount++;
+							}
+							else {
+								addToTable(keyBytes, tablechar);
+								multiByteCount++;
+							}
+						} catch (Exception e) {
+							Utils.log("ERROR - Invalid hex key in line: '" + s + "'");
+						}
+					}
+					else {
+						Utils.log("ERROR - Invalid key length in line: '" + s + "'");
+					}
 				}
 			}
 			else {
 				Utils.log("ERROR - Line not valid: '" + s + "'");
 			}
 		}
+		Utils.log("Tabla cargada: " + singleByteCount + " de un byte, " + multiByteCount + " entradas multibyte ");
 	}
 
 	/**
@@ -194,8 +228,40 @@ public class HexTable implements Serializable {
 	 */
 	public String toAscii(byte[] hexString, boolean expand, boolean decodeUnknown) {
 		StringBuilder sb = new StringBuilder();
-		for(byte b : hexString) {
-			sb.append(toString(b, expand, decodeUnknown));
+		int i = 0;
+		while(i < hexString.length) {
+			Match m = findLongestMatch(hexString, i);
+			if(m == null) {
+				// Unknown byte
+				if(decodeUnknown) {
+					sb.append(Constants.HEX_CHAR)
+					  .append(String.format(Constants.HEX_16_FORMAT, hexString[i]))
+					  .append(Constants.HEX_CHAR);
+				}
+				else {
+					sb.append(Constants.HEX_VIEWER_UNKNOWN_CHAR);
+				}
+				i++;
+			}
+			else {
+				String val = m.value;
+				if((val.length() > 1 || m.length > 1) && !expand) {
+					// Respect expand flag: show raw bytes if requested or unknown dot otherwise
+					if(decodeUnknown) {
+						for(int j = 0; j < m.length; j++) {
+							sb.append(Constants.HEX_CHAR)
+							  .append(String.format(Constants.HEX_16_FORMAT, hexString[i + j]))
+							  .append(Constants.HEX_CHAR);
+						}
+					} else {
+						sb.append(Constants.HEX_VIEWER_UNKNOWN_CHAR);
+					}
+				}
+				else {
+					sb.append(val);
+				}
+				i += m.length;
+			}
 		}
 		return sb.toString();
 	}
@@ -213,15 +279,15 @@ public class HexTable implements Serializable {
 	public byte[] toHex(String aString) {
 		byte[] res = new byte[aString.length()];
 		byte hexSpace;
-		if(reversed.containsKey(Constants.SPACE_STR)) {
-			hexSpace = reversed.get(Constants.SPACE_STR);
+		if(reversedSingle.containsKey(Constants.SPACE_STR)) {
+			hexSpace = reversedSingle.get(Constants.SPACE_STR);
 		}
 		else {
 			hexSpace = 0;
 		}
 		int i = 0;
 		for(char c : aString.toCharArray()) {
-			Byte b = reversed.get(String.valueOf(c));
+			Byte b = reversedSingle.get(String.valueOf(c));
 			if(b == null) {
 				res[i] = hexSpace;
 			}
@@ -241,7 +307,54 @@ public class HexTable implements Serializable {
 	 */
 	public void addToTable(Byte entry, String theChar) {
 		table.put(entry, theChar);
-		reversed.put(theChar, entry);
+		// For single-byte: allow overwriting (allows last definition to win for accents)
+		// E.g., 41=A then 41=Á, the Á will override
+		reversedSingle.put(theChar, entry);
+		// also add into trie as single-byte mapping
+		addToTable(new byte[]{entry}, theChar);
+	}
+
+	/**
+	 * Adds a multi-byte mapping into the trie and reversed maps.
+	 */
+	public void addToTable(byte[] key, String theChar) {
+		// Build trie path
+		TrieNode node = trieRoot;
+		for(byte b : key) {
+			node = node.children.computeIfAbsent(b, k -> new TrieNode());
+		}
+		node.value = theChar;
+		
+		// Update reversedMulti based on key length
+		if(key.length > 1) {
+			// Multi-byte: prefer first definition (unless new one is shorter)
+			if(!reversedMulti.containsKey(theChar)) {
+				reversedMulti.put(theChar, Arrays.copyOf(key, key.length));
+			}
+			else if(key.length < reversedMulti.get(theChar).length) {
+				reversedMulti.put(theChar, Arrays.copyOf(key, key.length));
+			}
+		}
+		else {
+			// Single-byte: always update (allows accent overrides like 41=A then 41=Á)
+			reversedMulti.put(theChar, Arrays.copyOf(key, key.length));
+		}
+		
+		// Store all alternatives for later disambiguation by analyzing original ROM
+		if(!multiAlternatives.containsKey(theChar)) {
+			multiAlternatives.put(theChar, new ArrayList<>());
+		}
+		byte[] keysCopy = Arrays.copyOf(key, key.length);
+		boolean alreadyExists = false;
+		for(byte[] existing : multiAlternatives.get(theChar)) {
+			if(Arrays.equals(existing, keysCopy)) {
+				alreadyExists = true;
+				break;
+			}
+		}
+		if(!alreadyExists) {
+			multiAlternatives.get(theChar).add(keysCopy);
+		}
 	}
 
 
@@ -252,6 +365,14 @@ public class HexTable implements Serializable {
 	 * @param entry the entry
 	 * @param showExtracting shows current extraction
 	 * @return the string
+	 */
+	/**
+	 * Transforms byte array to ASCII using the hex table.
+	 *
+	 * @param hexString the hex bytes to convert
+	 * @param entry the offset entry with start, end, and end chars
+	 * @param showExtracting whether to log extraction progress
+	 * @return the ASCII representation
 	 */
 	public String toAscii(byte[] hexString, OffsetEntry entry, boolean showExtracting) {
 		StringBuilder sb = new StringBuilder();
@@ -264,26 +385,43 @@ public class HexTable implements Serializable {
 				Utils.fillLeft(Integer.toHexString(entry.getEnd()), Constants.HEX_ADDR_SIZE).toUpperCase()));
 		}
 		sb.append(entry.toString()).append(Constants.NEWLINE);
-		for(int i = entry.getStart(); i <= entry.getEnd(); i++) {
-			Byte hex = hexString[i];
-			bytesreaded++;
-			if(table.containsKey(hex)) {
-				String value = table.get(hex);
-				if(value.length() > 1) {
-					line.append(Constants.S_CODEWORD_START);
-					line.append(value);
-					line.append(Constants.S_CODEWORD_END);
+		int i = entry.getStart();
+		while(i <= entry.getEnd()) {
+			Match m = findLongestMatch(hexString, i);
+			if(m != null) {
+				// Always append the value as-is from the table
+				// Braces are only used if explicitly defined by the user in the table
+				line.append(m.value);
+				i += m.length;
+				bytesreaded += m.length;
+				// If any of the consumed bytes is an end char, close the line
+				// Only treat the token as an end marker when the match itself is single-byte.
+				// Multi-byte characters that *end* with the same byte as the terminator should
+				// not prematurely close the line (e.g. codes like A7 8D where 8D is also the
+				// line terminator).
+				String lastByteHex = String.format(Constants.HEX_16_FORMAT, hexString[i - 1]);
+				boolean endCharMatched = m.length == 1 && entry.getEndChars().contains(lastByteHex);
+				if(endCharMatched || i - 1 == entry.getEnd()) {
+					String originalLine = line.toString();
+					String numChars = Utils.fillLeft(String.valueOf(originalLine.length()), Constants.LEN_NUM_CHARS);
+					String numCharsHex = Utils.fillLeft(String.valueOf(bytesreaded - bytesreadedStart), Constants.LEN_NUM_CHARS);
+					sb.append(Constants.COMMENT_LINE).append(Utils.fillLeft(Integer.toHexString(entry.getStart() + bytesreadedStart), Constants.HEX_ADDR_SIZE).toUpperCase());
+					sb.append(Constants.ORG_STR_OPEN).append(originalLine).append(Constants.ORG_STR_CLOSE);
+					sb.append(Constants.STR_NUM_CHARS).append(numChars).append(Constants.STR_NUM_CHARS).append(numCharsHex);
+					sb.append(Constants.NEWLINE);
+					sb.append(line).append(Constants.STR_NUM_CHARS).append(numCharsHex);
+					sb.append(Constants.NEWLINE);
+					line.setLength(0);
+					bytesreadedStart = bytesreaded;
 				}
-				else {
-					line.append(value);
-				}
-			}
-			if(!table.containsKey(hex) || i == entry.getEnd()) {
+			} else {
+				// Unknown byte at i
 				String hexStr = String.format(Constants.HEX_16_FORMAT, hexString[i]);
-				if(!table.containsKey(hex)) {
-					line.append(Constants.HEX_CHAR).append(hexStr).append(Constants.HEX_CHAR);
-				}
-				if(entry.getEndChars().contains(hexStr) || i == entry.getEnd()) {
+				line.append(Constants.HEX_CHAR).append(hexStr).append(Constants.HEX_CHAR);
+				i++;
+				bytesreaded++;
+				// Close line if end char or end of entry
+				if(entry.getEndChars().contains(hexStr) || i - 1 == entry.getEnd()) {
 					String originalLine = line.toString();
 					String numChars = Utils.fillLeft(String.valueOf(originalLine.length()), Constants.LEN_NUM_CHARS);
 					String numCharsHex = Utils.fillLeft(String.valueOf(bytesreaded - bytesreadedStart), Constants.LEN_NUM_CHARS);
@@ -297,6 +435,18 @@ public class HexTable implements Serializable {
 					bytesreadedStart = bytesreaded;
 				}
 			}
+		}
+		// Close any remaining incomplete line at the end of the range
+		if(line.length() > 0) {
+			String originalLine = line.toString();
+			String numChars = Utils.fillLeft(String.valueOf(originalLine.length()), Constants.LEN_NUM_CHARS);
+			String numCharsHex = Utils.fillLeft(String.valueOf(bytesreaded - bytesreadedStart), Constants.LEN_NUM_CHARS);
+			sb.append(Constants.COMMENT_LINE).append(Utils.fillLeft(Integer.toHexString(entry.getStart() + bytesreadedStart), Constants.HEX_ADDR_SIZE).toUpperCase());
+			sb.append(Constants.ORG_STR_OPEN).append(originalLine).append(Constants.ORG_STR_CLOSE);
+			sb.append(Constants.STR_NUM_CHARS).append(numChars).append(Constants.STR_NUM_CHARS).append(numCharsHex);
+			sb.append(Constants.NEWLINE);
+			sb.append(line).append(Constants.STR_NUM_CHARS).append(numCharsHex);
+			sb.append(Constants.NEWLINE);
 		}
 		sb.append(Constants.MAX_BYTES).append(bytesreaded).append(Constants.NEWLINE);
 		if(showExtracting) {
@@ -313,6 +463,10 @@ public class HexTable implements Serializable {
 	 * @return the byte[]
 	 */
 	public byte[] toHex(String string, OffsetEntry entry) {
+		return toHex(string, entry, null);
+	}
+
+	public byte[] toHex(String string, OffsetEntry entry, byte[] originalRomBytes) {
 		int offset = 0;
 		int offsetStart = 0;
 		byte[] hex = new byte[string.length() * 16];
@@ -321,8 +475,8 @@ public class HexTable implements Serializable {
 		char next;
 		boolean incomment = false;
 		byte hexSpace;
-		if(reversed.containsKey(Constants.SPACE_STR)) {
-			hexSpace = reversed.get(Constants.SPACE_STR);
+		if(reversedSingle.containsKey(Constants.SPACE_STR)) {
+			hexSpace = reversedSingle.get(Constants.SPACE_STR);
 		}
 		else {
 			hexSpace = 0;
@@ -440,31 +594,74 @@ public class HexTable implements Serializable {
 						k++;
 						foundCodeWord = Constants.S_CODEWORD_END.equals(string.substring(k, k+1));
 					}
-					byte codeWordValue = hexSpace;
+					byte[] codeWordValue = new byte[]{hexSpace};
 					if(foundCodeWord) {
-						//Get Key/value
-						String key = string.substring(i + 1, k);
-						if(reversed.containsKey(key)) {
-							codeWordValue = reversed.get(key);
+						//Get Key/value - try with braces first (for special functions like {space}, {line})
+						//then without braces (for normal multibyte values like {ab})
+						String keyWithBraces = string.substring(i, k + 1);
+						String keyWithoutBraces = string.substring(i + 1, k);
+						if(reversedMulti.containsKey(keyWithBraces)) {
+							codeWordValue = reversedMulti.get(keyWithBraces);
+						}
+						else if(reversedMulti.containsKey(keyWithoutBraces)) {
+							codeWordValue = reversedMulti.get(keyWithoutBraces);
 						}
 						else {
-							Utils.log("WARNING!!! CODE WORD NOT IN TABLE: '" + key + "'");
+							Utils.log("WARNING!!! CODE WORD NOT IN TABLE: '" + keyWithBraces + "'");
 						}
 						i = k;
 					}
-					hex[offset++] = codeWordValue;
+					for(byte bval : codeWordValue) {
+						hex[offset++] = bval;
+					}
 					break;
 				default:
 					String nextString = String.valueOf(next);
-					byte value = hexSpace;
-					if(reversed.containsKey(nextString)) {
-						value = reversed.get(nextString);
+					boolean found = false;
+					
+					// If we have original ROM bytes and multiple mappings exist, use the original byte
+					if(originalRomBytes != null && entry != null) {
+						int romPosition = entry.getStart() + offset;
+						if(romPosition < originalRomBytes.length) {
+							byte originalByte = originalRomBytes[romPosition];
+							// Check if this byte maps to our character
+							if(table.containsKey(originalByte) && table.get(originalByte).equals(nextString)) {
+								hex[offset++] = originalByte;
+								found = true;
+							}
+						}
 					}
-					else {
-						Utils.log("WARNING!!! CHARACTER NOT IN TABLE: '" + nextString + "'");
-						Utils.log(string.substring(stringStart, i));
+					
+					if(!found) {
+						// First try to find in reversedMulti (prioritizes longer mappings like 2-byte codes)
+						if(reversedMulti.containsKey(nextString)) {
+							// If we have multiple alternatives and original ROM, select the best one
+							byte[] multiValue;
+							if(multiAlternatives.containsKey(nextString) && 
+							   multiAlternatives.get(nextString).size() > 1 &&
+							   originalRomBytes != null && entry != null) {
+								// Analyze the original ROM zone to detect dominant prefix
+								multiValue = selectBestMultiByteEncoding(nextString, originalRomBytes, 
+									entry.getStart(), entry.getEnd());
+							} else {
+								multiValue = reversedMulti.get(nextString);
+							}
+							for(byte bval : multiValue) {
+								hex[offset++] = bval;
+							}
+							found = true;
+						}
+						// If not found, try reversedSingle
+						else if(reversedSingle.containsKey(nextString)) {
+							hex[offset++] = reversedSingle.get(nextString);
+						}
+						// Not found in either map
+						else {
+							Utils.log("WARNING!!! CHARACTER NOT IN TABLE: '" + nextString + "'");
+							Utils.log(string.substring(stringStart, i));
+							hex[offset++] = hexSpace;
+						}
 					}
-					hex[offset++] = value;
 					break;
 				}
 			}
@@ -513,8 +710,8 @@ public class HexTable implements Serializable {
 	 * @return the all entries
 	 * @throws IOException the exception
 	 */
-	public String getAllEntries(byte[] secondFileBytes, int numMinChars, int numIgnoredChars,
-			List<String> endCharsList, String dictFile) throws IOException {
+	    public String getAllEntries(byte[] secondFileBytes, int numMinChars, int numIgnoredChars,
+		    List<String> endCharsList, String dictFile) throws IOException {
 		searchPercent = 0;
 		// Remove carriage returns to standardize line endings (CRLF -> LF)
 		byte[] cleanedBytes = new byte[secondFileBytes.length];
@@ -541,9 +738,9 @@ public class HexTable implements Serializable {
 				lastTime = System.currentTimeMillis();
 				Utils.log(searchPercent + "% completed.");
 			}
-			Byte readedByteObj = secondFileBytes[i];
-			String dataCharHex = String.format(Constants.HEX_16_FORMAT, readedByteObj);
-			dataChar = table.getOrDefault(readedByteObj, null);
+			String dataCharHex = String.format(Constants.HEX_16_FORMAT, secondFileBytes[i]);
+			Match m = findLongestMatch(secondFileBytes, i);
+			dataChar = m != null ? m.value : null;
 			switch(status) {
 			case SEARCHING_START_OF_STRING:
 				if(dataChar != null) {
@@ -554,12 +751,18 @@ public class HexTable implements Serializable {
 					word.append(dataChar);
 					validString = false;
 					status = ENTRIES_STATUS.SEARCHING_END_OF_STRING;
+					if(m != null && m.length > 1) {
+						i += (m.length - 1);
+					}
 				}
 				break;
 			case SEARCHING_END_OF_STRING:
 				if(dataChar != null) {
 					sentence.append(dataChar);
 					word.append(dataChar);
+					if(m != null && m.length > 1) {
+						i += (m.length - 1);
+					}
 				}
 				else {
 					if(Utils.getCleanedString(word.toString()).length() > 1) {
@@ -587,6 +790,9 @@ public class HexTable implements Serializable {
 					sentence.append(dataChar);
 					word.append(dataChar);
 					status = ENTRIES_STATUS.SEARCHING_END_OF_STRING;
+					if(m != null && m.length > 1) {
+						i += (m.length - 1);
+					}
 				}
 				else {
 					skippedChars.add(dataCharHex);
@@ -637,6 +843,21 @@ public class HexTable implements Serializable {
 			sb.append(String.format(Constants.HEX_16_FORMAT, key)).append(Constants.TABLE_SEPARATOR).append(value);
 			sb.append(Constants.S_NEWLINE);
 		});
+		// Append multi-byte entries that are not single-byte
+		// Build a temporary set of single-byte hex keys to avoid duplicates
+		Set<String> singleHex = new HashSet<>();
+		table.forEach((k,v) -> singleHex.add(String.format(Constants.HEX_16_FORMAT, k)));
+		for(Map.Entry<String, byte[]> e : reversedMulti.entrySet()) {
+			byte[] key = e.getValue();
+			if(key.length > 1) {
+				StringBuilder khex = new StringBuilder();
+				for(byte b : key) {
+					khex.append(String.format(Constants.HEX_16_FORMAT, b));
+				}
+				String v = e.getKey();
+				sb.append(khex).append(Constants.TABLE_SEPARATOR).append(v).append(Constants.S_NEWLINE);
+			}
+		}
 		return sb.toString();
 	}
 
@@ -672,6 +893,126 @@ public class HexTable implements Serializable {
 	 */
 	public float getSearchPercent() {
 		return searchPercent;
+	}
+
+	/** Trie node for multi-byte decoding. */
+	private static class TrieNode {
+		Map<Byte, TrieNode> children = new HashMap<>();
+		String value; // non-null means a mapping ends here
+		void clear() {
+			children.clear();
+			value = null;
+		}
+		
+		/** Debug: count total entries in trie subtree */
+		@SuppressWarnings("unused")
+		int countEntries() {
+			int count = value != null ? 1 : 0;
+			for(TrieNode child : children.values()) {
+				count += child.countEntries();
+			}
+			return count;
+		}
+	}
+
+	/** Represents a matched entry at a position. */
+	private static class Match {
+		final int length;
+		final String value;
+		Match(int length, String value) { this.length = length; this.value = value; }
+	}
+
+	/**
+	 * Find the longest mapping starting at position 'pos'. Returns null if none.
+	 */
+	private Match findLongestMatch(byte[] data, int pos) {
+		TrieNode node = trieRoot;
+		String lastVal = null;
+		int lastLen = 0;
+		int i = pos;
+		
+		while(i < data.length && node != null) {
+			node = node.children.get(data[i]);
+			if(node == null) {
+				break;
+			}
+			if(node.value != null) {
+				lastVal = node.value;
+				lastLen = i - pos + 1;
+			}
+			i++;
+		}
+		
+		if(lastLen > 0) {
+			return new Match(lastLen, lastVal);
+		}
+		
+		// No match found in trie
+		return null;
+	}
+
+	/**
+	 * Analyzes the original ROM bytes in the given range and detects the dominant
+	 * first-byte prefix for multi-byte sequences (e.g., 0xA7 or 0xA5).
+	 * Returns the byte value of the most common first byte, or -1 if no pattern found.
+	 */
+	private int detectDominantPrefix(byte[] originalRomBytes, int startPos, int endPos) {
+		Map<Integer, Integer> prefixCounts = new HashMap<>();
+		int pos = startPos;
+		
+		while(pos <= endPos && pos < originalRomBytes.length) {
+			Match m = findLongestMatch(originalRomBytes, pos);
+			if(m != null && m.length > 1) {
+				// Multi-byte sequence found
+				byte firstByte = originalRomBytes[pos];
+				int prefix = firstByte & 0xFF;
+				prefixCounts.put(prefix, prefixCounts.getOrDefault(prefix, 0) + 1);
+				pos += m.length;
+			} else {
+				pos++;
+			}
+		}
+		
+		// Return the most common prefix
+		if(prefixCounts.isEmpty()) {
+			return -1;
+		}
+		
+		return prefixCounts.entrySet().stream()
+			.max((a, b) -> a.getValue().compareTo(b.getValue()))
+			.map(Map.Entry::getKey)
+			.orElse(-1);
+	}
+
+	/**
+	 * Selects the best multi-byte encoding for a character based on the dominant prefix
+	 * detected in the original ROM. If multiple alternatives exist, prefer the one that
+	 * matches the dominant prefix; otherwise fall back to the first definition.
+	 */
+	private byte[] selectBestMultiByteEncoding(String character, byte[] originalRomBytes, 
+											   int startPos, int endPos) {
+		// If no alternatives, use the default
+		if(!multiAlternatives.containsKey(character) || multiAlternatives.get(character).size() <= 1) {
+			return reversedMulti.get(character);
+		}
+		
+		// Detect dominant prefix in the ROM original
+		int dominantPrefix = detectDominantPrefix(originalRomBytes, startPos, endPos);
+		
+		if(dominantPrefix == -1) {
+			// No pattern detected, use default
+			return reversedMulti.get(character);
+		}
+		
+		// Find alternative that matches the dominant prefix
+		for(byte[] alt : multiAlternatives.get(character)) {
+			if(alt.length > 0 && (alt[0] & 0xFF) == dominantPrefix) {
+				return alt;
+			}
+		}
+		
+		// No match with dominant prefix, use default
+		return reversedMulti.get(character);
 	}
 
 }

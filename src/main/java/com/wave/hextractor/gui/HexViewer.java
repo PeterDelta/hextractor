@@ -127,6 +127,7 @@ public class HexViewer extends JFrame implements ActionListener {
     private JMenuItem searchRelative;
     private JMenuItem searchAll;
     private JMenuItem extract;
+    private JMenuItem loadOffsets;
     private JMenuItem find;
     private JMenuItem clearOffsets;
     private JMenuItem compareRomsItem;
@@ -1430,6 +1431,7 @@ public class HexViewer extends JFrame implements ActionListener {
         searchRelative = new JMenuItem(rb.getString(KeyConstants.KEY_SEARCH_RELATIVE_MENUITEM));
         searchAll = new JMenuItem(rb.getString(KeyConstants.KEY_SEARCH_ALL_MENUITEM));
         extract = new JMenuItem(rb.getString(KeyConstants.KEY_EXTRACT_MENUITEM));
+        loadOffsets = new JMenuItem(rb.getString(KeyConstants.KEY_LOAD_OFFSETS_MENUITEM));
         find = new JMenuItem(rb.getString(KeyConstants.KEY_FIND_MENUITEM));
         nextOffset = new JMenuItem(rb.getString(KeyConstants.KEY_NEXT_RANGE_MENUITEM));
         prevOffset = new JMenuItem(rb.getString(KeyConstants.KEY_PREV_TANGE_MENUITEM));
@@ -1451,6 +1453,7 @@ public class HexViewer extends JFrame implements ActionListener {
 
         // Mover "Buscar todo" (Ctrl+A) al menú Rangos, en primera posición
         offsetMenu.add(searchAll);
+        offsetMenu.add(loadOffsets);
         offsetMenu.add(extract);
         offsetMenu.add(nextOffset);
         offsetMenu.add(prevOffset);
@@ -1498,6 +1501,11 @@ public class HexViewer extends JFrame implements ActionListener {
             cols16Item.setSelected(false);
             cols32Item.setSelected(true);
         });
+
+        // Shortcut for loading ranges: Ctrl+Shift+S
+        loadOffsets.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+        loadOffsets.addActionListener(e -> loadOffsetsAction());
+
         columnsSub.add(cols16Item);
         columnsSub.add(cols32Item);
         viewMenu.add(columnsSub);
@@ -1581,9 +1589,9 @@ public class HexViewer extends JFrame implements ActionListener {
 
         JFileChooser chooser3 = new JFileChooser(jarDir);
         chooser3.setDialogTitle("Selecciona el archivo de salida .ext");
-        // Default filename: TR_#<current folder name>.ext
+        // Default filename: TR_#<current folder name> (sin extensión en el diálogo)
         var folderName = jarDir.getName();
-        var defaultExtName = "TR_#" + folderName + EXTENSION_EXTRACTION;
+        var defaultExtName = "TR_#" + folderName;
         chooser3.setSelectedFile(new File(jarDir, defaultExtName));
         int res3;
         File outExt;
@@ -1591,6 +1599,10 @@ public class HexViewer extends JFrame implements ActionListener {
             res3 = chooser3.showSaveDialog(this);
             if (res3 != JFileChooser.APPROVE_OPTION) return;
             outExt = chooser3.getSelectedFile();
+            // Añadir extensión .ext automáticamente si no la tiene
+            if (!outExt.getAbsolutePath().endsWith(EXTENSION_EXTRACTION)) {
+                outExt = new File(outExt.getAbsolutePath() + EXTENSION_EXTRACTION);
+            }
             if (outExt.exists()) {
                 int overwrite = JOptionPane.showConfirmDialog(this,
                     MessageFormat.format(rb.getString(KeyConstants.KEY_CONFIRM_OVERWRITE), outExt.getName()),
@@ -1680,8 +1692,13 @@ public class HexViewer extends JFrame implements ActionListener {
             private static final long serialVersionUID = 251407879942401215L;
             @Override
             public void actionPerformed(ActionEvent e) {
-                var outFileName = "TR_" + tableFile.getName().replaceAll(FileUtils.getFileExtension(tableFile.getName()),
-                        Constants.EXTRACT_EXTENSION_NODOT);
+                // Mostrar nombre sin extensión .ext en el diálogo
+                var baseName = tableFile.getName();
+                var extension = FileUtils.getFileExtension(baseName);
+                if (!extension.isEmpty()) {
+                    baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+                }
+                var outFileName = "TR_" + baseName;
                 JFileChooser fileChooser = new JFileChooser();
                 File selectedFile = new File(outFileName);
                 fileChooser.setSelectedFile(selectedFile);
@@ -1698,13 +1715,19 @@ public class HexViewer extends JFrame implements ActionListener {
                 fileChooser.setCurrentDirectory(parent);
                 fileChooser.setFileFilter(extOnlyFileFilter);
                 fileChooser.setApproveButtonText(rb.getString(KeyConstants.KEY_SAVE_BUTTON));
-                if (fileChooser.showSaveDialog(extract) == JFileChooser.APPROVE_OPTION &&
-                        confirmSelectedFile(fileChooser.getSelectedFile())) {
-                    try {
-                        FileUtils.extractAsciiFile(hexTable, fileBytes, fileChooser.getSelectedFile().getAbsolutePath(),
-                                offEntries, false);
-                    } catch (Exception e1) {
-                        Utils.logException(e1);
+                if (fileChooser.showSaveDialog(extract) == JFileChooser.APPROVE_OPTION) {
+                    File outputFile = fileChooser.getSelectedFile();
+                    // Añadir extensión .ext automáticamente si no la tiene
+                    if (!outputFile.getAbsolutePath().endsWith(EXTENSION_EXTRACTION)) {
+                        outputFile = new File(outputFile.getAbsolutePath() + EXTENSION_EXTRACTION);
+                    }
+                    if (confirmSelectedFile(outputFile)) {
+                        try {
+                            FileUtils.extractAsciiFile(hexTable, fileBytes, outputFile.getAbsolutePath(),
+                                    offEntries, false);
+                        } catch (Exception e1) {
+                            Utils.logException(e1);
+                        }
                     }
                 }
                 refreshAll();
@@ -1880,7 +1903,14 @@ public class HexViewer extends JFrame implements ActionListener {
             @Override
             public void actionPerformed(ActionEvent e) {
                 JFileChooser fileChooser = new JFileChooser();
-                fileChooser.setSelectedFile(tableFile);
+                // Mostrar nombre sin extensión .tbl en el diálogo
+                File displayFile = tableFile;
+                String tableName = tableFile.getName();
+                if (tableName.endsWith(EXTENSION_TABLE)) {
+                    tableName = tableName.substring(0, tableName.length() - EXTENSION_TABLE.length());
+                    displayFile = new File(tableFile.getParent(), tableName);
+                }
+                fileChooser.setSelectedFile(displayFile);
                 File parent = tableFile.getParentFile();
                 if(parent == null) {
                     parent = hexFile.getParentFile();
@@ -2349,6 +2379,27 @@ public class HexViewer extends JFrame implements ActionListener {
             Utils.logException(e1);
         }
         refreshAll();
+    }
+
+    /**
+     * Action to load ranges (.ext) from the UI.
+     */
+    private void loadOffsetsAction() {
+        File jarDir = Utils.getJarDirectory();
+        JFileChooser chooser = new JFileChooser(jarDir);
+        chooser.setFileFilter(extOnlyFileFilter);
+        chooser.setDialogTitle(rb.getString(KeyConstants.KEY_LOAD_OFFSETS_MENUITEM));
+        int res = chooser.showOpenDialog(this);
+        if (res == JFileChooser.APPROVE_OPTION) {
+            File selected = chooser.getSelectedFile();
+            if (selected != null && selected.exists()) {
+                reloadExtAsOffsetsFile(selected);
+                JOptionPane.showMessageDialog(this,
+                        rb.getString(KeyConstants.KEY_SEARCHED_ALL_DESC) + offEntries.size() + " rangos marcados",
+                        rb.getString(KeyConstants.KEY_SEARCHED_ALL_TITLE),
+                        JOptionPane.INFORMATION_MESSAGE);
+            }
+        }
     }
 
     /**
@@ -2828,7 +2879,12 @@ public class HexViewer extends JFrame implements ActionListener {
                     hexBuilder.append("   ");
                 } else {
                     byte b = fileBytes[idx];
-                    asciiBuilder.append((b >= 32 && b <= 126) ? (char) b : '.');
+                    // Use hexTable to convert byte to character, same as original code
+                    if (hexTable != null) {
+                        asciiBuilder.append(hexTable.toString(b, false));
+                    } else {
+                        asciiBuilder.append((b >= 32 && b <= 126) ? (char) b : '.');
+                    }
                     hexBuilder.append(String.format("%02X ", b));
                 }
             }

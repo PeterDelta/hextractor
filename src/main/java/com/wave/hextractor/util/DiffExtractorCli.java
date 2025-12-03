@@ -5,13 +5,13 @@ import java.io.File;
 /**
  * Simple CLI to extract differences between two ROMs into a .ext file.
  * Usage:
- *   java -cp Hextractor.jar com.wave.hextractor.util.DiffExtractorCli <original> <modified> <output.ext>
+ *   java -cp .Hextractor.jar com.wave.hextractor.util.DiffExtractorCli <original> <modified> <output.ext>
  */
 public class DiffExtractorCli {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 3) {
-            System.out.println("Usage: java -cp Hextractor.jar com.wave.hextractor.util.DiffExtractorCli <original> <modified> <output.ext> [--raw]");
+            System.out.println("Usage: java -cp .Hextractor.jar com.wave.hextractor.util.DiffExtractorCli <original> <modified> <output.ext> [--raw]");
             System.exit(1);
         }
 

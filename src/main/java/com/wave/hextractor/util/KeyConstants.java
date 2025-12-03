@@ -71,6 +71,9 @@ public class KeyConstants {
 	/** The Constant KEY_EXTRACT_MENUITEM. */
 	public static final String KEY_EXTRACT_MENUITEM = "extractMenuItem";
 
+	/** The Constant KEY_LOAD_OFFSETS_MENUITEM. */
+	public static final String KEY_LOAD_OFFSETS_MENUITEM = "loadOffsetsMenuItem";
+
 	/** The Constant KEY_EXTRACT_RESULT_TITLE. */
 	public static final String KEY_EXTRACT_RESULT_TITLE = "extractResultTitle";
 

@@ -355,6 +355,22 @@ public class FileUtils {
 		HexTable hexTable = new HexTable(firstFile);
 		String input = getAsciiFile(secondFile);
 		byte[] outFileBytes = Files.readAllBytes(Paths.get(thirdFile));
+		
+		// Try to read original ROM for multi-mapping resolution
+		byte[] originalRomBytes = null;
+		java.nio.file.Path thirdPath = Paths.get(thirdFile).toAbsolutePath();
+		String thirdFileName = thirdPath.getFileName().toString();
+		if(thirdFileName.startsWith("TR_")) {
+			String originalFileName = thirdFileName.substring(3);
+			java.nio.file.Path parentPath = thirdPath.getParent();
+			if(parentPath != null) {
+				String originalRomPath = parentPath.resolve(originalFileName).toString();
+				if(Files.exists(Paths.get(originalRomPath))) {
+					originalRomBytes = Files.readAllBytes(Paths.get(originalRomPath));
+				}
+			}
+		}
+		
 		String[] lines = input.split(Constants.S_NEWLINE);
 		int totalBytesWritten = 0;
 		int line = 0;
@@ -380,7 +396,7 @@ public class FileUtils {
 				content.append(lines[line]).append(Constants.S_NEWLINE);
 
 				// Process
-				byte[] hex = hexTable.toHex(content.toString(), entry);
+				byte[] hex = hexTable.toHex(content.toString(), entry, originalRomBytes);
 				if (Utils.isDebug()) {
 					Utils.log(" TO OFFSET: " + Utils.intToHexString(entry.getStart(), Constants.HEX_ADDR_SIZE));
 				}

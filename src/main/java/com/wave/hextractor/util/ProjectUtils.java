@@ -28,7 +28,7 @@ public class ProjectUtils {
 	private static final String PAUSE = "pause";
 
 	/** The Constant PROG_CALL. */
-	private static final String PROG_CALL = "java -jar Hextractor.jar ";
+	private static final String PROG_CALL = "java -jar .Hextractor.jar ";
 
 	/** The Constant INSERT_FILE. */
 	private static final String INSERT_FILE = "1.InsertAll.bat";
@@ -55,7 +55,7 @@ public class ProjectUtils {
 	private static final String SFILENAMENAME_VAR = "%S_FILENAME%";
 
 	/** The Constant FILE_HEXTRACTOR. */
-	private static final String FILE_HEXTRACTOR = "Hextractor.jar";
+	private static final String FILE_HEXTRACTOR = ".Hextractor.jar";
 
 	/** The Constant FILE_README. */
 	private static final String FILE_README = "_readme.txt";
@@ -166,10 +166,10 @@ public class ProjectUtils {
 				String folderRomExtension = null;
 				
 				if (files != null) {
-					// Buscar ROMs en la carpeta (ignorar TR_, Hextractor.jar, .bat, .txt)
+					// Buscar ROMs en la carpeta (ignorar TR_, .Hextractor.jar, .bat, .txt)
 					for (File f : files) {
 						if (f.isFile() && !f.getName().startsWith("TR_") && 
-						    !f.getName().equals("Hextractor.jar") &&
+							!f.getName().equals(".Hextractor.jar") &&
 						    !f.getName().endsWith(".bat") &&
 						    !f.getName().endsWith(".txt")) {
 							String ext = FileUtils.getFileExtension(f.getName());
@@ -237,10 +237,10 @@ public class ProjectUtils {
 				String folderRomExtension = null;
 
 				if (files != null) {
-					// Buscar ROMs en la carpeta (ignorar TR_, Hextractor.jar, .bat, .txt)
+					// Buscar ROMs en la carpeta (ignorar TR_, .Hextractor.jar, .bat, .txt)
 					for (File f : files) {
 						if (f.isFile() && !f.getName().startsWith("TR_") &&
-							!f.getName().equals("Hextractor.jar") &&
+							!f.getName().equals(".Hextractor.jar") &&
 							!f.getName().endsWith(".bat") &&
 							!f.getName().endsWith(".txt")) {
 							String ext = FileUtils.getFileExtension(f.getName());
@@ -414,7 +414,7 @@ public class ProjectUtils {
 		b.append("    echo.").append(Constants.NEWLINE);
 		b.append(")").append(Constants.NEWLINE).append(Constants.NEWLINE);
 		// Call CLI
-		b.append("java -cp \"Hextractor.jar\" com.wave.hextractor.util.DiffExtractorCli \"!ORIGINAL!\" \"!MODIFIED!\" \"!OUTPUT!\"").append(Constants.NEWLINE).append(Constants.NEWLINE);
+		b.append("java -cp \".Hextractor.jar\" com.wave.hextractor.util.DiffExtractorCli \"!ORIGINAL!\" \"!MODIFIED!\" \"!OUTPUT!\"").append(Constants.NEWLINE).append(Constants.NEWLINE);
 		// Error check
 		b.append("if !errorlevel! neq 0 (").append(Constants.NEWLINE);
 		b.append("    echo.").append(Constants.NEWLINE);
@@ -460,7 +460,7 @@ public class ProjectUtils {
 		fileContent.append("copy " + SFILENAMENAME_VAR + " " + TFILENAMENAME_VAR).append(Constants.NEWLINE);
 		// Bucle for con separación entre archivos
 		fileContent.append("for %%F in (TR_*.ext) do (").append(Constants.NEWLINE);
-		fileContent.append("    java -jar Hextractor.jar -h %SCRIPTNAME%.tbl \"%%F\" %T_FILENAME%").append(Constants.NEWLINE);
+		fileContent.append("    java -jar .Hextractor.jar -h %SCRIPTNAME%.tbl \"%%F\" %T_FILENAME%").append(Constants.NEWLINE);
 		fileContent.append("    echo.").append(Constants.NEWLINE);
 		fileContent.append(")").append(Constants.NEWLINE);
 		String checksumMode = getChecksumMode(fileName, fileType);

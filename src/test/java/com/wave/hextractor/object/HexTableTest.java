@@ -116,8 +116,8 @@ public class HexTableTest {
         byte[] data = new byte[]{0, 1, 2, 3, 4};
         OffsetEntry entry = new OffsetEntry(0, 4, Collections.singletonList("FF"));
         String ascii = "@00000000-00000004-FF\n" +
-                ";00000000{abc{ab}~04~}#011#005\n" +
-                "abc{ab}~04~#005\n" +
+                ";00000000{abcab~04~}#009#005\n" +
+                "abcab~04~#005\n" +
                 "|5\n";
         assertEquals(ascii, table.toAscii(data, entry,true));
         assertEquals(ascii, table.toAscii(data, entry,false));
@@ -174,4 +174,41 @@ public class HexTableTest {
         HexTable table = new HexTable(LINES);
         assertEquals(0, table.getSearchPercent(), 0.0);
     }
+
+    @Test
+    public void testEndCharWithMapped00() {
+        // Tabla: 00=fin, 01=a, 02=b
+        List<String> tableLines = Arrays.asList("00=fin", "01=a", "02=b");
+        HexTable table = new HexTable(tableLines);
+        // OffsetEntry: fin de cadena es 00
+        OffsetEntry entry = new OffsetEntry(0, 2, Collections.singletonList("00"));
+        // Datos: 01 02 00
+        byte[] data = new byte[]{0x01, 0x02, 0x00};
+        // Extraer ascii
+        String ascii = table.toAscii(data, entry, true);
+        // Validar que 'fin' aparece en algún lugar del resultado
+        assertTrue(ascii.contains("fin"), "No se extrajo correctamente el texto mapeado para 00");
+        assertTrue(ascii.contains("-00"), "No se detectó el cierre de línea por 00");
+    }
+
+    @Test
+    public void doesNotCutOnMultiByteEndingWithTerminator() {
+        // Terminator byte is 8D, but there is also a multi-byte code A7 8D that maps to "G".
+        List<String> tableLines = Arrays.asList(
+                "8D={FIN}",
+                "A78D=G"
+        );
+        HexTable table = new HexTable(tableLines);
+        OffsetEntry entry = new OffsetEntry(0, 2, Collections.singletonList("8D"));
+        // Bytes: [A7,8D] -> "G" (multi-byte); [8D] -> terminator "{FIN}"
+        byte[] data = new byte[]{(byte) 0xA7, (byte) 0x8D, (byte) 0x8D};
+
+        String expected = "@00000000-00000002-8D\n" +
+                ";00000000{G{FIN}}#006#003\n" +
+                "G{FIN}#003\n" +
+                "|3\n";
+
+        assertEquals(expected, table.toAscii(data, entry, true));
+    }
+
 }
